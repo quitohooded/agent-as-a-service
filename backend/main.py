@@ -1,20 +1,50 @@
 from fastapi import FastAPI, Request
-import httpx
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from openai import OpenAI
+from dotenv import load_dotenv
+import os
+from supabase_client import guardar_instruccion
 
+# Cargar variables de entorno desde .env
+load_dotenv()
+
+# Inicializar cliente de OpenAI
+client = OpenAI()  # Usa la API key desde OPENAI_API_KEY
+
+# Inicializar app FastAPI
 app = FastAPI()
 
-# Pegá acá la URL del webhook de prueba de n8n (Test URL)
-N8N_TEST_WEBHOOK = "http://localhost:5678/webhook-test/test"
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+# Esquema de la solicitud
+class InstruccionRequest(BaseModel):
+    instruccion: str
+
+# Ruta de prueba
+@app.get("/")
+async def root():
+    return {"message": "El backend está funcionando."}
+
+# Ruta principal que recibe la instrucción y responde
 @app.post("/instruccion")
-async def enviar_instruccion(request: Request):
-    data = await request.json()
-    instruccion = data.get("instruccion")
+async def enviar_instruccion(req: InstruccionRequest):
+    instruccion = req.instruccion
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(N8N_TEST_WEBHOOK, json={"mensaje": instruccion})
+    guardar_instruccion(instruccion)
 
-    return {
-        "status": response.status_code,
-        "respuesta": response.json()
-    }
+    # Llamada al modelo de OpenAI
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": instruccion}]
+    )
+
+    respuesta_texto = response.choices[0].message.content
+    return {"respuesta": respuesta_texto}
