@@ -1,7 +1,7 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from openai import OpenAI
+from openai import OpenAI, APIError
 from dotenv import load_dotenv
 import os
 from supabase_client import guardar_instruccion
@@ -9,16 +9,21 @@ from supabase_client import guardar_instruccion
 # Cargar variables de entorno desde .env
 load_dotenv()
 
-# Inicializar cliente de OpenAI
-client = OpenAI()  # Usa la API key desde OPENAI_API_KEY
+# Obtener API key
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    raise ValueError("La API Key de OpenAI no está configurada.")
+
+# Inicializar cliente OpenAI
+client = OpenAI(api_key=api_key)
 
 # Inicializar app FastAPI
 app = FastAPI()
 
-# CORS
+# Configuración de CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Cambiar a dominios específicos en producción
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,18 +38,27 @@ class InstruccionRequest(BaseModel):
 async def root():
     return {"message": "El backend está funcionando."}
 
-# Ruta principal que recibe la instrucción y responde
+# Ruta principal
 @app.post("/instruccion")
 async def enviar_instruccion(req: InstruccionRequest):
-    instruccion = req.instruccion
+    instruccion = req.instruccion.strip()
 
-    guardar_instruccion(instruccion)
+    if not instruccion:
+        return {"error": "La instrucción está vacía."}
 
-    # Llamada al modelo de OpenAI
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": instruccion}]
-    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": instruccion}]
+        )
+        respuesta_texto = response.choices[0].message.content
+    except APIError as e:
+        raise HTTPException(status_code=500, detail=f"Error al comunicarse con OpenAI: {str(e)}")
 
-    respuesta_texto = response.choices[0].message.content
+    try:
+        if guardar_instruccion(instruccion, respuesta_texto) is None:
+            return {"respuesta": respuesta_texto, "error": "No se pudo guardar en Supabase"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al guardar en Supabase: {str(e)}")
+
     return {"respuesta": respuesta_texto}
